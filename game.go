@@ -44,19 +44,20 @@ func High(r rune) rune {
 func Check(answer, right string, d map[rune]int) string {
 	word := []rune(answer)
 	correct := []rune(right)
+	d1 := make(map[rune]int)
 
 	res := make([]rune, 5)
 
 	for i := 0; i < 5; i++ {
 		if Low(word[i]) == Low(correct[i]) {
-			d[Low(word[i])]--
+			d1[Low(word[i])]++
 			res[i] = High(word[i])
 			log.Println(High(word[i]))
 		}
 	}
 	for i := 0; i < 5; i++ {
-		if d[Low(word[i])] != 0 && Low(word[i]) != Low(correct[i]) {
-			d[Low(word[i])]--
+		if d1[Low(word[i])] < d[Low(word[i])] && Low(word[i]) != Low(correct[i]) {
+			d1[Low(word[i])]++
 			res[i] = Low(word[i])
 		} else if Low(word[i]) != Low(correct[i]) {
 			res[i] = []rune("_")[0]
