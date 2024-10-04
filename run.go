@@ -22,6 +22,7 @@ var (
 	games      = make(map[int64]*GameState)
 	gamesMutex sync.Mutex
 	BotMes     tgbotapi.MessageConfig
+	words      = make(chan string, 9)
 )
 
 var keyBoard = tgbotapi.NewReplyKeyboard(
@@ -31,7 +32,23 @@ var keyBoard = tgbotapi.NewReplyKeyboard(
 		tgbotapi.NewKeyboardButton("easy"),
 	))
 
+func make_word(db *sql.DB, c chan<- string) {
+	var cur string
+	query := "SELECT word FROM nouns ORDER BY rand() LIMIT 1"
+	err := db.QueryRow(query).Scan(&cur)
+	if err != nil {
+		panic(err)
+	}
+	c <- cur
+}
+
+func get_word(g *GameState, c <-chan string) {
+	g.CorrectWord = <-c
+	g.CorrectWordD = CreateDict(g.CorrectWord)
+}
+
 func Run() {
+
 	bot, err := tgbotapi.NewBotAPI(Token)
 	if err != nil {
 		log.Panic(err)
@@ -63,8 +80,8 @@ func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 	if !exists {
 		game = &GameState{}
 		gamesMutex.Lock()
+		defer gamesMutex.Unlock()
 		games[chatID] = game
-		gamesMutex.Unlock()
 	}
 
 	if update.Message.Text == "/start" {
@@ -79,12 +96,7 @@ func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 			panic(err)
 		}
 		defer db.Close()
-		query := "SELECT word FROM nouns ORDER BY rand() LIMIT 1"
-		err = db.QueryRow(query).Scan(&game.CorrectWord)
-		if err != nil {
-			panic(err)
-		}
-		game.CorrectWordD = CreateDict(game.CorrectWord)
+		go make_word(db, words)
 	} else {
 		if game.Mod == 1 {
 			switch update.Message.Text {
@@ -93,39 +105,41 @@ func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 				game.AttemptsLeft = 2
 				BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Выбран hard уровень сложности, у вас есть 3 попытки угадать слово.")
 				BotMes.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+				get_word(game, words)
 			case "meduim":
 				game.Mod = 2
 				game.AttemptsLeft = 3
 				BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Выбран mediuk уровень сложности, у вас есть 4 попытки угадать слово.")
 				BotMes.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+				get_word(game, words)
 			case "easy":
 				game.Mod = 2
 				game.AttemptsLeft = 4
 				BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Выбран easy уровень сложности, у вас есть 5 попытки угадать слово.")
 				BotMes.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
+				get_word(game, words)
 			default:
 				BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Не верно введен уровень сложности.\nВозможные варианты:\neasy/hard/medium.")
 			}
 		} else if game.Mod == 2 {
-			if game.AttemptsLeft > 0 {
-				NewMes := strings.TrimSpace(update.Message.Text)
 
-				if IsValid(NewMes) {
-					CurRes := Check(NewMes, game.CorrectWord, game.CorrectWordD)
-					if Success(CurRes) {
-						BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Ура! Вы угадали слово. Приходите поиграть ещё!")
-						endGame(chatID)
-					} else {
-						game.AttemptsLeft--
-						BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, CurRes)
-					}
+			NewMes := strings.TrimSpace(update.Message.Text)
+
+			if IsValid(NewMes) {
+
+				CurRes := Check(NewMes, game.CorrectWord, game.CorrectWordD)
+				if Success(CurRes) {
+					BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Ура! Вы угадали слово. Приходите поиграть ещё!")
+					endGame(chatID)
+				} else if game.AttemptsLeft == 0 {
+					BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Игра окончена.Это было слово:\n"+game.CorrectWord+"\nНачните новую, отправив /play.")
+					endGame(chatID)
 				} else {
 					game.AttemptsLeft--
-					BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Некорректный ввод.")
+					BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, CurRes)
 				}
 			} else {
-				BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Игра окончена.Это было слово:\n"+game.CorrectWord+"\nНачните новую, отправив /play.")
-				endGame(chatID)
+				BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Некорректный ввод.")
 			}
 		} else {
 			BotMes = tgbotapi.NewMessage(update.Message.Chat.ID, "Для того что бы ознакомится с правилами отправьте /start, что бы играть отправьте /play")
@@ -136,6 +150,6 @@ func handleUpdate(bot *tgbotapi.BotAPI, update tgbotapi.Update) {
 
 func endGame(chatID int64) {
 	gamesMutex.Lock()
+	defer gamesMutex.Unlock()
 	delete(games, chatID)
-	gamesMutex.Unlock()
 }
